@@ -3,26 +3,28 @@
 #----------------------------------------------------------------------------#
 
 import json
-import dateutil.parser
-import babel
-from flask import Flask, render_template, request, Response, flash, redirect, url_for
-from flask_moment import Moment
+#import dateutil.parser
+#from dateutil import parser
+#import babel
+from flask import Flask, render_template, request, Response, flash, redirect, url_for, abort, jsonify
+#from flask_moment import Moment
 from flask_sqlalchemy import SQLAlchemy
 import logging
 from logging import Formatter, FileHandler
-from flask_wtf import Form
-from forms import *
+#from flask_wtf import Form
+#from forms import *
+from flask_migrate import Migrate
 #----------------------------------------------------------------------------#
 # App Config.
 #----------------------------------------------------------------------------#
 
 app = Flask(__name__)
-moment = Moment(app)
+#moment = Moment(app)
 app.config.from_object('config')
 db = SQLAlchemy(app)
 
 # TODO: connect to a local postgresql database
-
+migrate = Migrate(app,db)
 #----------------------------------------------------------------------------#
 # Models.
 #----------------------------------------------------------------------------#
@@ -32,14 +34,21 @@ class Venue(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String)
-    city = db.Column(db.String(120))
-    state = db.Column(db.String(120))
+    #city = db.Column(db.String(120))
+    #state = db.Column(db.String(120))
+    areas_id = db.Column(db.Integer, db.ForeignKey('Areas.id'), nullable = False)
     address = db.Column(db.String(120))
     phone = db.Column(db.String(120))
     image_link = db.Column(db.String(500))
     facebook_link = db.Column(db.String(120))
+    seeking_talent = db.Column(db.Boolean, unique=False, default=True)
+    seeking_description = db.Column(db.String(1500))
+    website = db.Column(db.String(120))
 
     # TODO: implement any missing fields, as a database migration using Flask-Migrate
+    # not sure if this is required
+    def __repr__(self):
+          return f'<Venue {self.id}, {self.name}, {self.phone}, {self.image_link}, {self.facebook_link}, {self.seeking_talent}, {self.seeking_description}, {self.website}>'
 
 class Artist(db.Model):
     __tablename__ = 'Artist'
@@ -54,7 +63,19 @@ class Artist(db.Model):
     facebook_link = db.Column(db.String(120))
 
     # TODO: implement any missing fields, as a database migration using Flask-Migrate
+class Areas(db.Model):
+    __tablename__ = 'Areas'
 
+    id = db.Column(db.Integer, primary_key=True)
+    city = db.Column(db.String(120))
+    state = db.Column(db.String(120))
+    children = db.relationship('Venue', backref='Venue', lazy=True)
+
+    # TODO: implement any missing fields, as a database migration using Flask-Migrate
+    # not sure if this is required
+    def __repr__(self):
+          return f'<Venue {self.id}, {self.city}, {self.state}>'
+    
 # TODO Implement Show and Artist models, and complete all model relationships and properties, as a database migration.
 
 #----------------------------------------------------------------------------#
@@ -85,45 +106,91 @@ def index():
 
 @app.route('/venues')
 def venues():
+  areas = []
+
+  data=db.session.query(Areas, Venue).join(Venue).order_by('city', 'state', 'name').all()
+  for area, venue in data:
+    area_item = {}
+    pos_area = -1
+    if len(areas) == 0:
+      pos_area = 0
+      area_item = {
+        "city": area.city,
+        "state": area.state,
+        "venues": []
+      }
+      areas.append(area_item)
+    else:
+      for i, existing_area in enumerate(areas):
+        if existing_area['city'] == area.city and existing_area['state'] == venue.state:
+          pos_area = i
+          break
+
+      if pos_area < 0:
+        area_item = {
+          "city": area.city,
+          "state": area.state,
+          "venues": []
+        }
+        areas.append(area_item)
+        pos_area = len(areas) - 1
+      else:
+        area_item = areas[pos_area]
+
+    v = {
+        "id": venue.id,
+        "name": venue.name,
+        "num_upcoming_shows": 4 #calculate this dynamically later
+      }
+    
+    area_item['venues'].append(v)
+    areas[pos_area] = area_item
+
+    # Render the template and pass the areas data
+    return render_template('pages/venues.html', areas=areas)
+  '''
+  error = False
+  try:
+     render_template('pages/venues.html', areas=Areas.query.all())
+  except:
+     error = True
+     #print(sys.exc_info())
+  finally:
+     areas=Venue.query.all()
+     # do something
+  if error:
+     abort(400)
+     # do something
+  else:
+     render_template('pages/venues.html', areas=Areas.query.all())
+     #return render_template('pages/home.html')
+     #return redirect(url_for('pages/home.html'))
+    '''
   # TODO: replace with real venues data.
   #       num_upcoming_shows should be aggregated based on number of upcoming shows per venue.
-  data=[{
-    "city": "San Francisco",
-    "state": "CA",
-    "venues": [{
-      "id": 1,
-      "name": "The Musical Hop",
-      "num_upcoming_shows": 0,
-    }, {
-      "id": 3,
-      "name": "Park Square Live Music & Coffee",
-      "num_upcoming_shows": 1,
-    }]
-  }, {
-    "city": "New York",
-    "state": "NY",
-    "venues": [{
-      "id": 2,
-      "name": "The Dueling Pianos Bar",
-      "num_upcoming_shows": 0,
-    }]
-  }]
-  return render_template('pages/venues.html', areas=data);
+
 
 @app.route('/venues/search', methods=['POST'])
 def search_venues():
   # TODO: implement search on artists with partial string search. Ensure it is case-insensitive.
   # seach for Hop should return "The Musical Hop".
   # search for "Music" should return "The Musical Hop" and "Park Square Live Music & Coffee"
-  response={
-    "count": 1,
-    "data": [{
-      "id": 2,
-      "name": "The Dueling Pianos Bar",
-      "num_upcoming_shows": 0,
-    }]
-  }
-  return render_template('pages/search_venues.html', results=response, search_term=request.form.get('search_term', ''))
+  search_term = request.form.get('search_term')
+  data = db.session.query(Venue).filter(Venue.name.ilike(f'%{search_term}%')).all()
+  items = []
+  for row in data:
+     aux = {
+        "id":row.id,
+        "name":row.name,
+        "num_upcoming_shows":4 #len(row.shows)
+     }
+     items.append(aux)
+
+  response = {
+     "count": len(items),
+     "data": items
+     }
+  return render_template('pages/search_venues.html', results=response, search_term=search_term)
 
 @app.route('/venues/<int:venue_id>')
 def show_venue(venue_id):
